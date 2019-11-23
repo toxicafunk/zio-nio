@@ -2,20 +2,19 @@ package zio.nio.channels
 
 import java.io.IOException
 import java.net.{ ServerSocket => JServerSocket, Socket => JSocket }
-import java.nio.{ ByteBuffer => JByteBuffer }
 import java.nio.channels.{
   SelectableChannel => JSelectableChannel,
   ServerSocketChannel => JServerSocketChannel,
   SocketChannel => JSocketChannel
 }
+import java.nio.{ ByteBuffer => JByteBuffer }
 
 import zio.nio.channels.SelectionKey.Operation
 import zio.nio.channels.spi.SelectorProvider
 import zio.nio.{ Buffer, SocketAddress, SocketOption }
-import zio.{ IO, UIO }
+import zio.{ IO, Managed, UIO }
 
 trait SelectableChannel extends Channel {
-
   protected val channel: JSelectableChannel
 
   final val provider: UIO[SelectorProvider] =
@@ -55,10 +54,9 @@ trait SelectableChannel extends Channel {
 
   final val blockingLock: UIO[AnyRef] =
     IO.effectTotal(channel.blockingLock())
-
 }
 
-final class SocketChannel(override protected[channels] val channel: JSocketChannel)
+final class SocketChannel private[channels] (override protected[channels] val channel: JSocketChannel)
     extends SelectableChannel
     with GatheringByteChannel
     with ScatteringByteChannel {
@@ -102,21 +100,33 @@ final class SocketChannel(override protected[channels] val channel: JSocketChann
   final val localAddress: IO[IOException, Option[SocketAddress]] =
     IO.effect(Option(channel.getLocalAddress()).map(new SocketAddress(_)))
       .refineToOrDie[IOException]
-
 }
 
 object SocketChannel {
 
-  final val open: IO[IOException, SocketChannel] =
-    IO.effect(new SocketChannel(JSocketChannel.open())).refineToOrDie[IOException]
+  final def apply(channel: JSocketChannel): Managed[IOException, SocketChannel] = {
+    val open = IO.effect(new SocketChannel(channel)).refineToOrDie[IOException]
+    Managed.make(open)(_.close.orDie)
+  }
 
-  final def open(remote: SocketAddress): IO[IOException, SocketChannel] =
-    IO.effect(new SocketChannel(JSocketChannel.open(remote.jSocketAddress)))
+  final val open: Managed[IOException, SocketChannel] = {
+    val open = IO.effect(new SocketChannel(JSocketChannel.open())).refineToOrDie[IOException]
+    Managed.make(open)(_.close.orDie)
+  }
+
+  final def open(remote: SocketAddress): Managed[IOException, SocketChannel] = {
+    val open = IO
+      .effect(new SocketChannel(JSocketChannel.open(remote.jSocketAddress)))
       .refineToOrDie[IOException]
+    Managed.make(open)(_.close.orDie)
+  }
 
+  def fromJava(javaSocketChannel: JSocketChannel): Managed[Nothing, SocketChannel] =
+    IO.effectTotal(new SocketChannel(javaSocketChannel)).toManaged(_.close.orDie)
 }
 
-final class ServerSocketChannel(override protected val channel: JServerSocketChannel) extends SelectableChannel {
+final class ServerSocketChannel private (override protected val channel: JServerSocketChannel)
+    extends SelectableChannel {
 
   final def bind(local: SocketAddress): IO[IOException, Unit] =
     IO.effect(channel.bind(local.jSocketAddress)).refineToOrDie[IOException].unit
@@ -130,17 +140,32 @@ final class ServerSocketChannel(override protected val channel: JServerSocketCha
   final val socket: UIO[JServerSocket] =
     IO.effectTotal(channel.socket())
 
+  /**
+   * Accepts a socket connection.
+   *
+   * Not you must manually manage the lifecyle of the returned socket, calling `close` when you're finished with it.
+   *
+   * @return None if this socket is in non-blocking mode and no connection is currently available to be accepted.
+   */
   final def accept: IO[IOException, Option[SocketChannel]] =
     IO.effect(Option(channel.accept()).map(new SocketChannel(_))).refineToOrDie[IOException]
 
   final val localAddress: IO[IOException, SocketAddress] =
     IO.effect(new SocketAddress(channel.getLocalAddress())).refineToOrDie[IOException]
-
 }
 
 object ServerSocketChannel {
 
-  final val open: IO[IOException, ServerSocketChannel] =
-    IO.effect(new ServerSocketChannel(JServerSocketChannel.open())).refineToOrDie[IOException]
+  final def apply(channel: JServerSocketChannel): Managed[IOException, ServerSocketChannel] = {
+    val open = IO.effect(new ServerSocketChannel(channel)).refineToOrDie[IOException]
+    Managed.make(open)(_.close.orDie)
+  }
 
+  final val open: Managed[IOException, ServerSocketChannel] = {
+    val open = IO.effect(new ServerSocketChannel(JServerSocketChannel.open())).refineToOrDie[IOException]
+    Managed.make(open)(_.close.orDie)
+  }
+
+  def fromJava(javaChannel: JServerSocketChannel): Managed[IOException, ServerSocketChannel] =
+    IO.effectTotal(new ServerSocketChannel(javaChannel)).toManaged(_.close.orDie)
 }

@@ -8,7 +8,6 @@ class SocketAddress private[nio] (private[nio] val jSocketAddress: JSocketAddres
 
 class InetSocketAddress private[nio] (private val jInetSocketAddress: JInetSocketAddress)
     extends SocketAddress(jInetSocketAddress) {
-
   def port: Int = jInetSocketAddress.getPort
 
   def hostName: IO[Exception, String] =
@@ -17,10 +16,12 @@ class InetSocketAddress private[nio] (private val jInetSocketAddress: JInetSocke
   def hostString: String = jInetSocketAddress.getHostString
 
   def isUnresolved: Boolean = jInetSocketAddress.isUnresolved
+
+  final override def toString: String =
+    jInetSocketAddress.toString
 }
 
 object SocketAddress {
-
   def inetSocketAddress(port: Int): IO[Exception, InetSocketAddress] = InetSocketAddress(port)
 
   def inetSocketAddress(hostname: String, port: Int): IO[Exception, InetSocketAddress] =
